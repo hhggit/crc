@@ -17,6 +17,9 @@
 
 #include <boost/limits.hpp>  // for std::numeric_limits
 
+#if __cplusplus >= 201402L
+#include <utility>
+#endif
 
 // The type of CRC parameters that can go in a template should be related
 // on the CRC's bit count.  This macro expresses that type in a compact
@@ -299,13 +302,13 @@ namespace detail
     {
         typedef typename boost::uint_t<Bits>::fast  value_type;
 
-        static  value_type  reflect( value_type x );
+        BOOST_CXX14_CONSTEXPR static  value_type  reflect( value_type x );
 
     };  // boost::detail::reflector
 
     // Function that reflects its argument
     template < std::size_t Bits >
-    typename reflector<Bits>::value_type
+    BOOST_CXX14_CONSTEXPR typename reflector<Bits>::value_type
     reflector<Bits>::reflect
     (
         typename reflector<Bits>::value_type  x
@@ -347,7 +350,7 @@ namespace detail
 #if defined(__EDG_VERSION__) && __EDG_VERSION__ <= 243
         static const least sig_bits = (~( ~( 0ul ) << Bits )) ;
 #else
-        BOOST_STATIC_CONSTANT( least, sig_bits = (~( ~(least( 0u )) << Bits )) );
+        BOOST_STATIC_CONSTANT( least, sig_bits = least(~( least(~(least( 0u ))) << Bits )) );
 #endif
 #if defined(__GNUC__) && __GNUC__ == 4 && __GNUC_MINOR__ == 0 && __GNUC_PATCHLEVEL__ == 2
         // Work around a weird bug that ICEs the compiler in build_c_cast
@@ -451,6 +454,56 @@ namespace detail
     };  // boost::detail::mask_uint_t
     #endif
 
+#if __cplusplus >= 201402L
+    template <std::size_t Bits, BOOST_CRC_PARM_TYPE TruncPoly, bool Reflect, typename value_type, typename masking_type>
+    constexpr static value_type calc_table(unsigned char dividend) {
+        // factor-out constants to avoid recalculation
+        value_type const fast_hi_bit = masking_type::high_bit_fast;
+        unsigned char const byte_hi_bit = 1u << (CHAR_BIT - 1u);
+        value_type remainder = 0;
+
+        // go through all the dividend's bits
+        for ( unsigned char mask = byte_hi_bit; mask; mask >>= 1 )
+        {
+          // check if divisor fits
+          if ( crc_helper<CHAR_BIT, Reflect>::reflect(dividend) & mask )
+          {
+            remainder ^= fast_hi_bit;
+          }
+
+          // do polynominal division
+          if ( remainder & fast_hi_bit )
+          {
+            remainder <<= 1;
+            remainder ^= TruncPoly;
+          }
+          else
+          {
+            remainder <<= 1;
+          }
+        }
+
+        return crc_helper<Bits, Reflect>::reflect( remainder );
+      }
+
+      template <std::size_t Bits, BOOST_CRC_PARM_TYPE TruncPoly, bool Reflect, typename Table >
+      struct crc_table_generator {
+        typedef mask_uint_t<Bits> masking_type;
+        typedef typename masking_type::fast value_type;
+
+        Table table_;
+
+        constexpr value_type operator[](int i) const {return table_[i];}
+
+        template<typename T, T...Is>
+        constexpr crc_table_generator(std::integer_sequence<T, Is...>)
+          : table_{(calc_table<Bits, TruncPoly, Reflect, value_type, masking_type>(Is))...}
+        {}
+        constexpr crc_table_generator()
+          : crc_table_generator(std::make_index_sequence<sizeof(Table)/sizeof(value_type)>())
+        {}
+      };
+#endif
 
     // CRC table generator
     template < std::size_t Bits, BOOST_CRC_PARM_TYPE TruncPoly, bool Reflect >
@@ -472,12 +525,22 @@ namespace detail
         typedef value_type                   table_type[ byte_combos ];
 #endif
 
-        static  void  init_table();
+#if __cplusplus >= 201402L
+    typedef crc_table_generator<Bits, TruncPoly, Reflect, table_type> generator_type;
+    constexpr static generator_type table_{};
+#else
+    static  void  init_table();
 
-        static  table_type  table_;
+    static  table_type  table_;
+#endif
 
     };  // boost::detail::crc_table_t
 
+#if __cplusplus >= 201402L
+    template < std::size_t Bits, BOOST_CRC_PARM_TYPE TruncPoly, bool Reflect >
+    constexpr typename crc_table_t<Bits, TruncPoly, Reflect>::generator_type
+    crc_table_t<Bits, TruncPoly, Reflect>::table_;
+#else
     // CRC table generator static data member definition
     // (Some compilers [Borland C++] require the initializer to be present.)
     template < std::size_t Bits, BOOST_CRC_PARM_TYPE TruncPoly, bool Reflect >
@@ -534,6 +597,7 @@ namespace detail
 
         did_init = true;
     }
+#endif
 
     #ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
     // Align the msb of the remainder to a byte
@@ -570,7 +634,7 @@ namespace detail
 
     #ifndef BOOST_NO_TEMPLATE_PARTIAL_SPECIALIZATION
         // Possibly reflect a remainder
-        static  value_type  reflect( value_type x )
+        BOOST_CONSTEXPR static  value_type  reflect( value_type x )
             { return detail::reflector<Bits>::reflect( x ); }
 
         // Compare a byte to the remainder's highest byte
@@ -607,7 +671,7 @@ namespace detail
         typedef typename uint_t<Bits>::fast  value_type;
 
         // Possibly reflect a remainder
-        static  value_type  reflect( value_type x )
+        BOOST_CONSTEXPR static  value_type  reflect( value_type x )
             { return x; }
 
         // Compare a byte to the remainder's highest byte
@@ -839,7 +903,9 @@ BOOST_CRC_OPTIMAL_NAME::crc_optimal
 )
     : rem_( helper_type::reflect(init_rem) )
 {
+#if __cplusplus < 201402L
     crc_table_type::init_table();
+#endif
 }
 
 template < std::size_t Bits, BOOST_CRC_PARM_TYPE TruncPoly,
@@ -1059,8 +1125,9 @@ augmented_crc
     typename masking_type::fast  rem = initial_remainder;
     byte_type const * const      b = static_cast<byte_type const *>( buffer );
     byte_type const * const      e = b + byte_count;
-
+#if __cplusplus < 201402L
     crc_table_type::init_table();
+#endif
     for ( byte_type const * p = b ; p < e ; ++p )
     {
         // Use the current top byte as the table index to the next
