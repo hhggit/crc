@@ -455,54 +455,62 @@ namespace detail
     #endif
 
 #if __cplusplus >= 201402L
-    template <std::size_t Bits, BOOST_CRC_PARM_TYPE TruncPoly, bool Reflect, typename value_type, typename masking_type>
-    constexpr static value_type calc_table(unsigned char dividend) {
-        // factor-out constants to avoid recalculation
-        value_type const fast_hi_bit = masking_type::high_bit_fast;
-        unsigned char const byte_hi_bit = 1u << (CHAR_BIT - 1u);
-        value_type remainder = 0;
-
-        // go through all the dividend's bits
-        for ( unsigned char mask = byte_hi_bit; mask; mask >>= 1 )
-        {
-          // check if divisor fits
-          if ( crc_helper<CHAR_BIT, Reflect>::reflect(dividend) & mask )
-          {
-            remainder ^= fast_hi_bit;
-          }
-
-          // do polynominal division
-          if ( remainder & fast_hi_bit )
-          {
-            remainder <<= 1;
-            remainder ^= TruncPoly;
-          }
-          else
-          {
-            remainder <<= 1;
-          }
-        }
-
-        return crc_helper<Bits, Reflect>::reflect( remainder );
-      }
-
-      template <std::size_t Bits, BOOST_CRC_PARM_TYPE TruncPoly, bool Reflect, typename Table >
-      struct crc_table_generator {
+    template < std::size_t Bits, BOOST_CRC_PARM_TYPE TruncPoly,
+               bool Reflect, typename Table >
+    class constant_crc_table
+    {
+    public:
         typedef mask_uint_t<Bits> masking_type;
         typedef typename masking_type::fast value_type;
 
+        constexpr constant_crc_table()
+                : constant_crc_table(
+                      std::make_index_sequence<sizeof(Table)
+                                               / sizeof(value_type)>())
+            {  }
+
+        constexpr const value_type& operator[](std::size_t i) const
+            { return table_[i]; }
+
+    private:
         Table table_;
 
-        constexpr value_type operator[](int i) const {return table_[i];}
+        template<std::size_t...Is>
+        constexpr constant_crc_table(std::integer_sequence<std::size_t, Is...>)
+                : table_{init_item(Is)...}
+            {  }
 
-        template<typename T, T...Is>
-        constexpr crc_table_generator(std::integer_sequence<T, Is...>)
-          : table_{(calc_table<Bits, TruncPoly, Reflect, value_type, masking_type>(Is))...}
-        {}
-        constexpr crc_table_generator()
-          : crc_table_generator(std::make_index_sequence<sizeof(Table)/sizeof(value_type)>())
-        {}
-      };
+        static constexpr value_type init_item(unsigned char dividend)
+            {
+                // factor-out constants to avoid recalculation
+                value_type const fast_hi_bit = masking_type::high_bit_fast;
+                unsigned char const byte_hi_bit = 1u << (CHAR_BIT - 1u);
+                value_type remainder = 0;
+
+                // go through all the dividend's bits
+                for ( unsigned char mask = byte_hi_bit; mask; mask >>= 1 )
+                {
+                    // check if divisor fits
+                    if ( crc_helper<CHAR_BIT, Reflect>::reflect(dividend) & mask )
+                    {
+                        remainder ^= fast_hi_bit;
+                    }
+
+                    // do polynominal division
+                    if ( remainder & fast_hi_bit )
+                    {
+                        remainder <<= 1;
+                        remainder ^= TruncPoly;
+                    }
+                    else
+                    {
+                        remainder <<= 1;
+                    }
+                }
+
+                return crc_helper<Bits, Reflect>::reflect( remainder );
+            }
+    };
 #endif
 
     // CRC table generator
@@ -526,24 +534,24 @@ namespace detail
 #endif
 
 #if __cplusplus >= 201402L
-    typedef crc_table_generator<Bits, TruncPoly, Reflect, table_type> generator_type;
-    constexpr static generator_type table_{};
+        using constant_table =
+            constant_crc_table<Bits, TruncPoly, Reflect, table_type>;
+        static constexpr constant_table table_{};
 #else
-    static  void  init_table();
+        static  void  init_table();
 
-    static  table_type  table_;
+        static  table_type  table_;
 #endif
 
     };  // boost::detail::crc_table_t
 
-#if __cplusplus >= 201402L
-    template < std::size_t Bits, BOOST_CRC_PARM_TYPE TruncPoly, bool Reflect >
-    constexpr typename crc_table_t<Bits, TruncPoly, Reflect>::generator_type
-    crc_table_t<Bits, TruncPoly, Reflect>::table_;
-#else
     // CRC table generator static data member definition
     // (Some compilers [Borland C++] require the initializer to be present.)
     template < std::size_t Bits, BOOST_CRC_PARM_TYPE TruncPoly, bool Reflect >
+#if __cplusplus >= 201402L
+    constexpr typename crc_table_t<Bits, TruncPoly, Reflect>::constant_table
+    crc_table_t<Bits, TruncPoly, Reflect>::table_;
+#else
     typename crc_table_t<Bits, TruncPoly, Reflect>::table_type
     crc_table_t<Bits, TruncPoly, Reflect>::table_
      = { 0 };
