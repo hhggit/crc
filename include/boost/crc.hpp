@@ -45,6 +45,9 @@
 
 #include <climits>  // for CHAR_BIT, etc.
 #include <cstddef>  // for std::size_t
+#if __cplusplus >= 201402
+#include <utility>  // for std::integer_sequence, etc
+#endif
 
 #include <boost/limits.hpp>  // for std::numeric_limits
 
@@ -381,6 +384,7 @@ namespace detail
         \todo  Check if this is the fastest way.
      */
     template < typename Unsigned >
+    BOOST_CXX14_CONSTEXPR
     Unsigned  reflect_unsigned( Unsigned x, int word_length
      = std::numeric_limits<Unsigned>::digits )
     {
@@ -479,6 +483,7 @@ namespace detail
         \return  The possibly (partially) reflected value.
      */
     template < typename Unsigned >
+    BOOST_CXX14_CONSTEXPR
     inline
     Unsigned  reflect_optionally( Unsigned x, bool reflect, int word_length
      = std::numeric_limits<Unsigned>::digits )
@@ -546,6 +551,7 @@ namespace detail
           the final CRC.
      */
     template < typename Register, typename Word >
+    BOOST_CXX14_CONSTEXPR
     void  crc_modulo_word_update( int register_length, Register &remainder, Word
      new_dividend_bits, Register truncated_divisor, int word_length, bool
      reflect )
@@ -963,6 +969,7 @@ namespace detail
         \todo  Check that using the unaugmented-CRC division routines give the
           same composite mask table as using augmented-CRC routines.
      */
+#if __cplusplus < 201402
     template < int SubOrder, typename Register >
     boost::array< Register, (UINTMAX_C( 1 ) << SubOrder) >
     make_partial_xor_products_table( int register_length, Register
@@ -983,6 +990,42 @@ namespace detail
         }
         return result;
     }
+#else
+    namespace table_detail {
+        template <typename Register, typename Dividend>
+        constexpr Register
+        generate_elem( int SubOrder, int register_length, Register
+         truncated_divisor, bool reflect, Dividend d )
+        {
+            Dividend  dividend = reflect_optionally(d, reflect, SubOrder);
+            Register  remainder = 0u;
+
+            crc_modulo_word_update( register_length, remainder, dividend,
+             truncated_divisor, SubOrder, false );
+            return reflect_optionally( remainder, reflect, register_length );
+        }
+
+        template <typename Register, typename T, T... Is, typename... A>
+        constexpr boost::array<Register, sizeof...(Is)>
+        generate_array( std::integer_sequence<T, Is...>, A... as )
+        {
+            return {generate_elem(as..., Is)...};
+        }
+    } // namespace table_detail
+
+    template < int SubOrder, typename Register >
+    constexpr boost::array< Register, (UINTMAX_C( 1 ) << SubOrder) >
+    make_partial_xor_products_table( int register_length, Register
+     truncated_divisor, bool reflect )
+    {
+        constexpr auto N = ( UINTMAX_C(1) << SubOrder );
+        using Dividend = typename boost::uint_t<SubOrder + 1>::fast;
+
+        return table_detail::generate_array<Register>(
+                std::make_integer_sequence<Dividend, N>{}, SubOrder,
+                register_length, truncated_divisor, reflect);
+    }
+#endif
 
     /** \brief  A mix-in class for the table of table-driven CRC algorithms
 
@@ -1059,6 +1102,7 @@ namespace detail
             \return  A reference to a immutable array giving the partial-product
               update XOR map for each potential sub-unit value.
          */
+#if __cplusplus < 201402
         static  array_type const &  get_table()
         {
             static  array_type const  table =
@@ -1068,6 +1112,20 @@ namespace detail
             return table;
         }
     };
+#else
+        static  array_type const &  get_table() { return table_; }
+
+        static constexpr array_type table_{
+            make_partial_xor_products_table<unit_width_c::value>(
+                width_c::value, poly_c::value, refin_c::value) };
+    };
+
+    template < int Order, int SubOrder, boost::uintmax_t TruncatedPolynomial,
+        bool Reflect >
+    constexpr typename
+        crc_table_t<Order, SubOrder, TruncatedPolynomial, Reflect>::array_type
+        crc_table_t<Order, SubOrder, TruncatedPolynomial, Reflect>::table_;
+#endif
 
     /** \brief  A mix-in class that handles direct (i.e. non-reflected) byte-fed
           table-driven CRC algorithms
